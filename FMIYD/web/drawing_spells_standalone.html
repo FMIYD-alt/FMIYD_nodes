@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>二次元角色提示词查找 — FMIYD</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: sans-serif; background: #1a1a1a; color: #ddd; margin: 0; padding: 12px; }
+        h1 { font-size: 1.2rem; margin: 0 0 10px 0; color: #eee; }
+        .hint { background: #2a4a6a; color: #b8d4ff; padding: 8px 10px; border-radius: 6px; margin-bottom: 10px; font-size: 12px; }
+        .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+        .toolbar label { color: #999; font-size: 12px; }
+        .toolbar input[type="text"], .toolbar textarea { padding: 6px 8px; border-radius: 4px; background: #252525; color: #eee; border: 1px solid #444; font-size: 13px; }
+        .toolbar textarea { min-width: 180px; min-height: 36px; resize: vertical; }
+        .toolbar select { padding: 6px 8px; border-radius: 4px; background: #252525; color: #eee; border: 1px solid #444; font-size: 13px; }
+        .toolbar button { padding: 6px 12px; border-radius: 4px; background: #333; color: #ddd; border: 1px solid #555; cursor: pointer; font-size: 13px; }
+        .toolbar button:hover { background: #404040; }
+        .more-opts { margin-top: 8px; padding-top: 8px; border-top: 1px solid #333; display: none; }
+        .more-opts.show { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+        .status { color: #888; font-size: 12px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+        .card { background: #252525; border-radius: 8px; overflow: hidden; border: 2px solid transparent; transition: border-color 0.2s; }
+        .card:hover { border-color: #555; }
+        .card .img-wrap { width: 100%; padding-top: 133%; position: relative; background: #111; }
+        .card img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }
+        .card .img-placeholder { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: #555; font-size: 11px; }
+        .card .img-placeholder.done { display: none; }
+        .card .img-placeholder.fail { color: #666; font-size: 10px; }
+        .card .info { padding: 6px 8px; font-size: 11px; }
+        .card .count { color: #6af; margin-bottom: 4px; }
+        .card .prompt-preview { max-height: 48px; overflow: hidden; text-overflow: ellipsis; color: #999; line-height: 1.3; word-break: break-all; }
+        .card .btns { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; }
+        .card .btns button { padding: 4px 8px; font-size: 11px; background: #333; color: #ccc; border: 1px solid #444; border-radius: 4px; cursor: pointer; }
+        .card .btns button:hover { background: #404040; }
+        .card.card-fill { cursor: pointer; }
+        .card.card-fill .img-wrap, .card.card-fill .prompt-preview { cursor: pointer; }
+        .card .btns button.primary { background: #2a4a6a; color: #b8d4ff; }
+        .pagination { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 12px 0; }
+        .pagination button { padding: 6px 10px; font-size: 12px; }
+        .pagination .current { color: #6af; }
+        .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #2d5a2d; color: #b8ffb8; padding: 12px 24px; border-radius: 8px; font-size: 14px; z-index: 9999; display: none; }
+    </style>
+</head>
+<body>
+    <h1>● 二次元角色提示词查找</h1>
+    <p class="hint" id="hint">动漫/游戏角色 prompt 查询，数据来自 NoobAI-XL 训练集。点击卡片即可复制或填入。</p>
+    <div class="toolbar">
+        <label>包含 Include:</label>
+        <textarea id="include" rows="1" placeholder="多个用逗号或换行，支持 | 表示或"></textarea>
+        <label>排除 Exclude:</label>
+        <textarea id="exclude" rows="1" placeholder="多个用逗号或换行"></textarea>
+        <button type="button" id="btnFilter">搜索</button>
+        <span class="status" id="status">加载数据中…</span>
+        <button type="button" id="btnMoreOpts">更多选项</button>
+    </div>
+    <div class="more-opts" id="moreOpts">
+        <label>匹配方式:</label>
+        <select id="matching">
+            <option value="substring">Substring 子串</option>
+            <option value="exact">Exact 精确</option>
+        </select>
+        <label>排序:</label>
+        <select id="sort">
+            <option value="default">Default 默认</option>
+            <option value="count">Image Count 图数</option>
+            <option value="random">Random 随机</option>
+        </select>
+        <label>排除图数少于:</label>
+        <input type="number" id="excludeCount" value="30" min="0" style="width:60px">
+        <label>每页:</label>
+        <select id="pageSize">
+            <option value="30">30</option>
+            <option value="50" selected>50</option>
+            <option value="100">100</option>
+        </select>
+        <label>复制时忽略的 tag（逗号/分号/换行）:</label>
+        <input type="text" id="ignorePrompts" placeholder="留空则不忽略" style="min-width:120px">
+    </div>
+    <div class="pagination" id="pagination"></div>
+    <div class="grid" id="grid"></div>
+    <div class="toast" id="toast">已复制</div>
+
+    <script>
+(function() {
+    // 优先走本机代理（后端拉图+本地缓存），与页面同源，避免直连外网 404
+    var IMG_BASE = "/fmiyd/drawing_spells_img?f=";
+    var IMG_BASE_FALLBACK = "https://raw.githubusercontent.com/hbl917070/DrawingSpells/main/imgs/";
+    var DATA_CHAR_URL = "/fmiyd/ds/characterList.js";
+    var DATA_COUNT_URL = "/fmiyd/ds/imageCountList.js";
+    var DATA_BASE_FALLBACK = "https://raw.githubusercontent.com/hbl917070/DrawingSpells/main/data/";
+    var nodeId = (function() {
+        var m = /[?&]node_id=([^&]+)/.exec(window.location.search);
+        return m ? decodeURIComponent(m[1]) : null;
+    })();
+    var isOpener = !!window.opener && !window.opener.closed && nodeId;
+
+    if (isOpener) {
+        var h = document.getElementById("hint");
+        if (h) h.textContent = "点击任意卡片即可自动填入节点，无需复制粘贴。可关闭此窗口。";
+    }
+
+    var _characterList = [];
+    var _imageCountList = {};
+    var processedList = [];
+    var currentPage = 1;
+    var pageSize = 50;
+    var totalPages = 1;
+    var filteredData = [];
+
+    function showToast(msg) {
+        var t = document.getElementById("toast");
+        t.textContent = msg || "已复制";
+        t.style.display = "block";
+        setTimeout(function() { t.style.display = "none"; }, 2500);
+    }
+
+    function escapeHtml(s) {
+        if (s == null) return "";
+        return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    }
+
+    function loadData(cb) {
+        var cached = null;
+        try {
+            var raw = sessionStorage.getItem("fmiyd_ds_char");
+            if (raw) {
+                var o = JSON.parse(raw);
+                if (o.exp > Date.now() && o.list && o.list.length) {
+                    cached = { list: o.list, count: JSON.parse(sessionStorage.getItem("fmiyd_ds_count") || "{}") };
+                    if (cached.count && Object.keys(cached.count).length) { cb(cached.list, cached.count); return; }
+                }
+            }
+        } catch (e) {}
+        function loadScript(url) {
+            return fetch(url).then(function(r) { if (!r.ok) throw new Error(r.status); return r.text(); });
+        }
+        document.getElementById("status").textContent = "加载角色列表…";
+        loadScript(DATA_CHAR_URL).catch(function() {
+            return loadScript(DATA_BASE_FALLBACK + "characterList.js");
+        }).then(function(t) {
+            try {
+                var s = document.createElement("script");
+                s.textContent = t;
+                document.body.appendChild(s);
+                document.body.removeChild(s);
+                _characterList = window._characterList || [];
+            } catch (e) { _characterList = []; }
+            document.getElementById("status").textContent = "加载图数统计…";
+            return loadScript(DATA_COUNT_URL).catch(function() {
+                return loadScript(DATA_BASE_FALLBACK + "imageCountList.js");
+            });
+        }).then(function(t) {
+            try {
+                var s = document.createElement("script");
+                s.textContent = t;
+                document.body.appendChild(s);
+                document.body.removeChild(s);
+                _imageCountList = window._imageCountList || {};
+            } catch (e) { _imageCountList = {}; }
+            try {
+                sessionStorage.setItem("fmiyd_ds_char", JSON.stringify({ exp: Date.now() + 30 * 60 * 1000, list: _characterList }));
+                sessionStorage.setItem("fmiyd_ds_count", JSON.stringify(_imageCountList));
+            } catch (e) {}
+            processList();
+            cb(_characterList, _imageCountList);
+        }).catch(function() {
+            document.getElementById("status").textContent = "加载失败，请检查网络";
+        });
+    }
+
+    function processList() {
+        processedList = [];
+        for (var i = 0; i < _characterList.length; i++) {
+            var d = _characterList[i];
+            var parts = (d.prompt || "").split(",").map(function(p) { return p.trim(); }).filter(Boolean);
+            var name = parts[0] || "";
+            var series = parts.length > 1 ? parts[1] : "";
+            var nameAndSeries = series ? name + ", " + series : name;
+            var count = _imageCountList[nameAndSeries.replace(/\\/g, "")] || 0;
+            processedList.push({
+                file: d.file,
+                prompt: d.prompt,
+                promptParts: parts,
+                name: name,
+                series: series,
+                nameAndSeries: nameAndSeries,
+                count: count,
+                cleanPromptParts: parts.map(function(p) { return p.replace(/[\W_]+/g, "").toLowerCase(); })
+            });
+        }
+    }
+
+    function filterAndSort() {
+        var includeText = (document.getElementById("include").value || "").split(/[,\n]/).map(function(s) { return s.trim(); }).filter(Boolean);
+        var excludeText = (document.getElementById("exclude").value || "").split(/[,\n]/).map(function(s) { return s.trim(); }).filter(Boolean);
+        var matching = document.getElementById("matching").value;
+        var sortType = document.getElementById("sort").value;
+        var excludeCount = parseInt(document.getElementById("excludeCount").value, 10) || 0;
+        if (excludeCount < 0) excludeCount = 0;
+
+        var processedIncludes = includeText.map(function(p) {
+            return p.split("|").map(function(s) { return s.trim().replace(/[\W_]+/g, "").toLowerCase(); }).filter(Boolean);
+        });
+
+        function matchFn(pat) {
+            if (matching === "exact") return function(part) { return part === pat; };
+            return function(part) { return part.indexOf(pat) !== -1; };
+        }
+
+        var out = [];
+        for (var i = 0; i < processedList.length; i++) {
+            var d = processedList[i];
+            if (d.count < excludeCount) continue;
+            if (processedIncludes.length) {
+                var ok = true;
+                for (var j = 0; j < processedIncludes.length; j++) {
+                    var sub = processedIncludes[j];
+                    var any = false;
+                    for (var k = 0; k < sub.length; k++) {
+                        for (var n = 0; n < d.cleanPromptParts.length; n++) {
+                            if (matchFn(sub[k])(d.cleanPromptParts[n])) { any = true; break; }
+                        }
+                        if (any) break;
+                    }
+                    if (!any) { ok = false; break; }
+                }
+                if (!ok) continue;
+            }
+            if (excludeText.length) {
+                var excluded = false;
+                for (var j = 0; j < excludeText.length; j++) {
+                    var cleanEx = excludeText[j].replace(/[\W_]+/g, "").toLowerCase();
+                    for (var n = 0; n < d.cleanPromptParts.length; n++) {
+                        if (matchFn(cleanEx)(d.cleanPromptParts[n])) { excluded = true; break; }
+                    }
+                    if (excluded) break;
+                }
+                if (excluded) continue;
+            }
+            out.push(d);
+        }
+
+        if (sortType === "count") {
+            out.sort(function(a, b) {
+                if (b.count !== a.count) return b.count - a.count;
+                return (a.name || "").localeCompare(b.name || "");
+            });
+        } else if (sortType === "random") {
+            for (var i = out.length - 1; i > 0; i--) {
+                var j = Math.floor(Math.random() * (i + 1));
+                var t = out[i]; out[i] = out[j]; out[j] = t;
+            }
+        } else {
+            var seriesCount = {};
+            for (var i = 0; i < out.length; i++) {
+                var s = out[i].series || "";
+                if (s === "original") continue;
+                seriesCount[s] = (seriesCount[s] || 0) + (out[i].count || 0);
+            }
+            out.sort(function(a, b) {
+                var ac = seriesCount[a.series || ""] || 0, bc = seriesCount[b.series || ""] || 0;
+                if (bc !== ac) return bc - ac;
+                if ((a.series || "") !== (b.series || "")) return (a.series || "").localeCompare(b.series || "");
+                return (a.name || "").localeCompare(b.name || "");
+            });
+        }
+        return out;
+    }
+
+    function applyIgnorePrompts(parts, ignoreStr) {
+        if (!ignoreStr || !ignoreStr.trim()) return parts;
+        var ignore = ignoreStr.split(/[,;\n]/).map(function(s) { return s.trim(); }).filter(Boolean);
+        return parts.filter(function(p) {
+            var clean = p.replace(/[\W_]+/g, "").toLowerCase();
+            for (var i = 0; i < ignore.length; i++) {
+                if (ignore[i] === "*") return false;
+                if (ignore[i].indexOf("*") >= 0) {
+                    var re = new RegExp("^" + ignore[i].replace(/\*/g, ".*") + "$", "i");
+                    if (re.test(p)) return false;
+                } else if (clean === ignore[i].replace(/[\W_]+/g, "").toLowerCase()) return false;
+            }
+            return true;
+        });
+    }
+
+    function render() {
+        filteredData = filterAndSort();
+        pageSize = parseInt(document.getElementById("pageSize").value, 10) || 50;
+        totalPages = Math.max(1, Math.ceil(filteredData.length / pageSize));
+        if (currentPage > totalPages) currentPage = totalPages;
+        var start = (currentPage - 1) * pageSize;
+        var slice = filteredData.slice(start, start + pageSize);
+
+        document.getElementById("status").textContent = "共 " + filteredData.length + " 条，第 " + currentPage + " / " + totalPages + " 页";
+
+        var grid = document.getElementById("grid");
+        grid.innerHTML = "";
+        for (var i = 0; i < slice.length; i++) {
+            var d = slice[i];
+            var card = document.createElement("div");
+            card.className = "card";
+            if (isOpener) card.classList.add("card-fill");
+            var imgUrl = (IMG_BASE || IMG_BASE_FALLBACK) + encodeURIComponent(d.file || "");
+            var promptPreview = escapeHtml((d.prompt || "").slice(0, 80)) + ((d.prompt || "").length > 80 ? "…" : "");
+            card.innerHTML =
+                '<div class="img-wrap"><span class="img-placeholder" aria-hidden="true">加载中…</span><img data-file="' + escapeHtml(d.file || "") + '" src="' + imgUrl + '" loading="lazy" alt="" referrerpolicy="no-referrer"></div>' +
+                '<div class="info">' +
+                '<div class="count">' + d.count + ' 张</div>' +
+                '<div class="prompt-preview" title="' + escapeHtml(d.prompt || "") + '">' + promptPreview + '</div>' +
+                '<div class="btns">' +
+                '<button type="button" class="name">名称</button>' +
+                '<button type="button" class="ns">名称+作品</button>' +
+                '<button type="button" class="full">完整</button>' +
+                '</div></div>';
+            (function(data) {
+                function fillToNode() {
+                    var parts = applyIgnorePrompts(data.promptParts || [], document.getElementById("ignorePrompts").value || "");
+                    var text = parts.join(", ");
+                    if (window.opener && !window.opener.closed && nodeId) {
+                        try {
+                            window.opener.postMessage({ type: "fmiyd_drawing_spells_tag", tag: text, node_id: nodeId }, "*");
+                            showToast("已填入节点，可关闭此窗口");
+                            setTimeout(function() { window.close(); }, 800);
+                        } catch (e) {}
+                    }
+                    return text;
+                }
+                if (isOpener) {
+                    card.onclick = function(e) {
+                        if (e.target.closest(".btns")) return;
+                        fillToNode();
+                    };
+                }
+                var nameBtn = card.querySelector(".name");
+                var nsBtn = card.querySelector(".ns");
+                var fullBtn = card.querySelector(".full");
+                if (nameBtn) nameBtn.onclick = function(e) { e.stopPropagation(); navigator.clipboard && navigator.clipboard.writeText(data.name || "").then(function() { showToast("已复制名称"); }).catch(function() {}); };
+                if (nsBtn) nsBtn.onclick = function(e) { e.stopPropagation(); navigator.clipboard && navigator.clipboard.writeText(data.nameAndSeries || "").then(function() { showToast("已复制名称+作品"); }).catch(function() {}); };
+                if (fullBtn) fullBtn.onclick = function(e) {
+                    e.stopPropagation();
+                    var parts = applyIgnorePrompts(data.promptParts || [], document.getElementById("ignorePrompts").value || "");
+                    var text = parts.join(", ");
+                    navigator.clipboard && navigator.clipboard.writeText(text).then(function() { showToast("已复制完整提示词"); }).catch(function() {});
+                };
+                var img = card.querySelector(".img-wrap img");
+                var ph = card.querySelector(".img-placeholder");
+                if (img) {
+                    img.onload = function() { if (ph) { ph.classList.add("done"); ph.textContent = ""; } };
+                    img.onerror = function() {
+                        var f = this.getAttribute("data-file");
+                        if (f && this.src.indexOf(IMG_BASE_FALLBACK) === -1) {
+                            this.src = IMG_BASE_FALLBACK + encodeURIComponent(f);
+                            if (ph) { ph.textContent = "重试…"; }
+                        } else {
+                            if (ph) { ph.classList.add("fail"); ph.textContent = "加载失败"; }
+                        }
+                    };
+                }
+                if (img && img.complete && img.naturalWidth) { if (ph) ph.classList.add("done"); }
+            })(d);
+            grid.appendChild(card);
+        }
+
+        var pag = document.getElementById("pagination");
+        pag.innerHTML = "";
+        if (totalPages <= 1) return;
+        var addBtn = function(num, label) {
+            var b = document.createElement("button");
+            b.type = "button";
+            b.textContent = label || num;
+            b.onclick = function() {
+                currentPage = num;
+                render();
+            };
+            if (num === currentPage) b.className = "current";
+            pag.appendChild(b);
+        };
+        addBtn(1);
+        if (currentPage > 2) { var el = document.createElement("span"); el.textContent = " … "; pag.appendChild(el); }
+        for (var p = Math.max(1, currentPage - 2); p <= Math.min(totalPages, currentPage + 2); p++) {
+            if (p === 1) continue;
+            addBtn(p);
+        }
+        if (currentPage < totalPages - 2) { var el = document.createElement("span"); el.textContent = " … "; pag.appendChild(el); }
+        if (totalPages > 1) addBtn(totalPages);
+    }
+
+    document.getElementById("btnFilter").onclick = function() { currentPage = 1; render(); };
+    document.getElementById("btnMoreOpts").onclick = function() {
+        var el = document.getElementById("moreOpts");
+        el.classList.toggle("show");
+    };
+
+    loadData(function() {
+        document.getElementById("status").textContent = "就绪，共 " + processedList.length + " 条";
+        currentPage = 1;
+        render();
+    });
+})();
+    </script>
+</body>
+</html>

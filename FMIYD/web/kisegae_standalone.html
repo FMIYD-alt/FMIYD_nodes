@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>更衣人偶画廊 — FMIYD</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: sans-serif; background: #1a1a1a; color: #ddd; margin: 0; padding: 16px; }
+        h1 { font-size: 1.25rem; margin: 0 0 12px 0; color: #eee; }
+        .hint { background: #2a4a6a; color: #b8d4ff; padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; font-size: 13px; }
+        .toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+        .toolbar select { padding: 8px 12px; border-radius: 6px; background: #252525; color: #eee; border: 1px solid #444; font-size: 14px; }
+        .toolbar button { padding: 8px 14px; border-radius: 6px; background: #333; color: #ddd; border: 1px solid #555; cursor: pointer; font-size: 14px; }
+        .toolbar button:hover { background: #404040; }
+        .status { color: #888; font-size: 13px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 10px; }
+        .card { background: #252525; border-radius: 8px; overflow: hidden; cursor: pointer; border: 2px solid transparent; transition: border-color 0.2s, box-shadow 0.2s; }
+        .card:hover { border-color: #555; box-shadow: 0 0 12px rgba(0,0,0,0.3); }
+        .card.selected { border-color: #6af; box-shadow: 0 0 14px rgba(102,170,255,0.4); }
+        .card .img-wrap { width: 100%; padding-top: 133%; position: relative; background: #111; }
+        .card img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }
+        .card .tag-preview { padding: 6px 8px; font-size: 11px; line-height: 1.3; max-height: 36px; overflow: hidden; text-overflow: ellipsis; color: #999; }
+        .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #2d5a2d; color: #b8ffb8; padding: 12px 24px; border-radius: 8px; font-size: 14px; z-index: 9999; display: none; }
+    </style>
+</head>
+<body>
+    <h1>● 更衣人偶画廊</h1>
+    <p class="hint" id="hint" style="display:none;"></p>
+    <div class="toolbar">
+        <label>画廊:</label>
+        <select id="folderSelect"></select>
+        <span class="status" id="status">加载中…</span>
+        <button type="button" id="refreshBtn">↻ 刷新</button>
+    </div>
+    <div class="grid" id="grid"></div>
+    <div class="toast" id="toast" style="display:none;"></div>
+
+    <script>
+(function() {
+    var RAW = "https://raw.githubusercontent.com/hayde0096/Kisegaeningyou/main/";
+    /** 走 Comfy 同源的 /fmiyd/kisegae_api/*，由服务端请求 GitHub（避免浏览器直连 API 失败、限流） */
+    var API_TREE = "/fmiyd/kisegae_api/tree";
+    var API_CONTENTS = "/fmiyd/kisegae_api/contents?p=";
+    var nodeId = (function() {
+        var m = /[?&]node_id=([^&]+)/.exec(window.location.search);
+        return m ? decodeURIComponent(m[1]) : null;
+    })();
+    var hasValidNodeId = !!nodeId && nodeId !== "-1";
+    var isOpener = !!window.opener && !window.opener.closed;
+    var isIframe = !!window.parent && window.parent !== window;
+
+    if ((isOpener || isIframe) && hasValidNodeId) {
+        var h = document.getElementById("hint");
+        if (h) h.textContent = "点击图片后，提示词会自动填回 ComfyUI 节点，无需复制粘贴。";
+    }
+
+    function decodeBase64(s) {
+        if (!s) return "暂无说明";
+        try {
+            var safe = s.replace(/-/g, "+").replace(/_/g, "/");
+            var pad = (4 - safe.length % 4) % 4;
+            safe += "=".repeat(pad);
+            return decodeURIComponent(escape(atob(safe)));
+        } catch (e) { return "解析失败"; }
+    }
+
+    function showToast() {
+        // 现在不再显示提示气泡，保留空函数避免报错
+    }
+
+    var currentPath = "";
+    var currentItems = [];
+    var folderList = [];
+    var loadAbort = null;
+
+    function renderGrid(items) {
+        var grid = document.getElementById("grid");
+        grid.innerHTML = "";
+        (items || []).forEach(function(item, i) {
+            var card = document.createElement("div");
+            card.className = "card";
+            card.title = "快送FMIYD一个5090";
+            card.dataset.idx = i;
+            card._item = item;
+            var wrap = document.createElement("div");
+            wrap.className = "img-wrap";
+            var img = document.createElement("img");
+            img.loading = "lazy";
+            img.src = item.url;
+            img.alt = "";
+            img.onerror = function() { img.style.background = "#333"; };
+            wrap.appendChild(img);
+            card.appendChild(wrap);
+            var prev = document.createElement("div");
+            prev.className = "tag-preview";
+            prev.textContent = (item.tag || "").slice(0, 50) + (item.tag && item.tag.length > 50 ? "…" : "");
+            card.appendChild(prev);
+            card.onclick = function() {
+                var tag = (card._item && card._item.tag) ? String(card._item.tag) : "";
+                if (tag === "…") tag = "";
+                if (isOpener || isIframe) {
+                    try {
+                        var target = isOpener && window.opener && !window.opener.closed ? window.opener : window.parent;
+                        target.postMessage({ type: "fmiyd_kisegae_tag", tag: tag, node_id: hasValidNodeId ? nodeId : null }, "*");
+                        showToast();
+                        var toast = document.getElementById("toast");
+                        if (toast) {
+                            toast.textContent = isIframe
+                                ? "已填回 ComfyUI 节点，可继续选择或关闭画廊"
+                                : "已填回 ComfyUI 节点，可关闭此窗口";
+                        }
+                        if (isOpener) {
+                            setTimeout(function() { window.close(); }, 800);
+                        }
+                    } catch (e) { }
+                }
+                if (!isOpener && !isIframe && navigator.clipboard && navigator.clipboard.writeText)
+                    navigator.clipboard.writeText(tag).then(function() { if (!nodeId) showToast(); }).catch(function() {});
+                grid.querySelectorAll(".card").forEach(function(c) { c.classList.remove("selected"); });
+                card.classList.add("selected");
+            };
+            grid.appendChild(card);
+        });
+    }
+
+    function updateCardTags(bases, descMap) {
+        var grid = document.getElementById("grid");
+        bases.forEach(function(k) {
+            var text = (descMap[k] && descMap[k].text != null) ? descMap[k].text : "暂无说明";
+            var short = text.slice(0, 50) + (text.length > 50 ? "…" : "");
+            var idx = currentItems.findIndex(function(it) { return it.base === k; });
+            if (idx < 0) return;
+            var card = grid.querySelector(".card[data-idx=\"" + idx + "\"]");
+            if (!card) return;
+            var prev = card.querySelector(".tag-preview");
+            if (prev) prev.textContent = short;
+            currentItems[idx].tag = text;
+        });
+    }
+
+    var CACHE_PREFIX = "fmiyd_kisegae_";
+    var CACHE_MIN = 10;
+
+    function cacheGet(key) {
+        try {
+            var raw = sessionStorage.getItem(CACHE_PREFIX + key);
+            if (!raw) return null;
+            var o = JSON.parse(raw);
+            if (o.exp && Date.now() > o.exp) { sessionStorage.removeItem(CACHE_PREFIX + key); return null; }
+            return o.data;
+        } catch (e) { return null; }
+    }
+    function cacheSet(key, data, min) {
+        try {
+            sessionStorage.setItem(CACHE_PREFIX + key, JSON.stringify({ data: data, exp: Date.now() + (min || CACHE_MIN) * 60 * 1000 }));
+        } catch (e) {}
+    }
+
+    function preloadFolder(path) {
+        if (!path || cacheGet("folder_" + path)) return;
+        fetch(API_CONTENTS + encodeURIComponent(path))
+            .then(function(r) { return r.ok ? r.json() : Promise.reject(new Error(r.status)); })
+            .then(function(files) {
+                var imageExt = /\.(jpg|jpeg|png|gif|webp)$/i;
+                var images = files.filter(function(f) { return f.type === "file" && imageExt.test(f.name); });
+                var descMap = {};
+                files.forEach(function(f) {
+                    if (f.name.endsWith(".desc.txt")) {
+                        var base = f.name.replace(/\.desc\.txt$/, "");
+                        if (f.content) descMap[base] = { text: decodeBase64(f.content) };
+                        else if (f.download_url) descMap[base] = { download_url: f.download_url, text: null };
+                        else descMap[base] = { text: "暂无说明" };
+                    }
+                });
+                var needFetch = Object.keys(descMap).filter(function(k) { return descMap[k].download_url; });
+                var concurrency = 12;
+                function fetchBatch(start) {
+                    var slice = needFetch.slice(start, start + concurrency);
+                    if (slice.length === 0) return Promise.resolve();
+                    return Promise.all(slice.map(function(k) {
+                        return fetch(descMap[k].download_url)
+                            .then(function(r) { return r.text(); })
+                            .then(function(t) {
+                                try { descMap[k].text = decodeURIComponent(escape(t)); } catch (e) { descMap[k].text = t || "暂无说明"; }
+                            }).catch(function() { descMap[k].text = "暂无说明"; });
+                    })).then(function() { return fetchBatch(start + concurrency); });
+                }
+                return fetchBatch(0).then(function() {
+                    var items = [];
+                    images.forEach(function(im) {
+                        var base = im.name;
+                        var desc = descMap[base];
+                        var tag = (desc && desc.text != null) ? desc.text : "暂无说明";
+                        items.push({ url: RAW + path + "/" + encodeURIComponent(im.name), tag: tag, base: base });
+                    });
+                    cacheSet("folder_" + path, { items: items });
+                });
+            })
+            .catch(function(e) { if (e.name !== "AbortError") { /* ignore */ } });
+    }
+
+    function loadFolder(path) {
+        if (loadAbort) loadAbort.abort();
+        loadAbort = new AbortController();
+        var signal = loadAbort.signal;
+        currentPath = path;
+        document.getElementById("status").textContent = "加载中…";
+        currentItems = [];
+        renderGrid([]);
+        var cached = cacheGet("folder_" + path);
+        if (cached && cached.items && cached.items.length) {
+            currentItems = cached.items;
+            renderGrid(currentItems);
+            document.getElementById("status").textContent = "共 " + currentItems.length + " 件（已缓存）";
+            preloadAdjacent(path);
+            return;
+        }
+        fetch(API_CONTENTS + encodeURIComponent(path), { signal: signal })
+            .then(function(r) { return r.ok ? r.json() : Promise.reject(new Error(r.status)); })
+            .then(function(files) {
+                if (signal.aborted) return;
+                var imageExt = /\.(jpg|jpeg|png|gif|webp)$/i;
+                var images = files.filter(function(f) { return f.type === "file" && imageExt.test(f.name); });
+                var descMap = {};
+                files.forEach(function(f) {
+                    if (f.name.endsWith(".desc.txt")) {
+                        var base = f.name.replace(/\.desc\.txt$/, "");
+                        if (f.content) descMap[base] = { text: decodeBase64(f.content) };
+                        else if (f.download_url) descMap[base] = { download_url: f.download_url, text: null };
+                        else descMap[base] = { text: "暂无说明" };
+                    }
+                });
+                currentItems = [];
+                images.forEach(function(im) {
+                    var base = im.name;
+                    var desc = descMap[base];
+                    var tag = (desc && desc.text != null) ? desc.text : "";
+                    currentItems.push({ url: RAW + path + "/" + encodeURIComponent(im.name), tag: tag || "…", base: base });
+                });
+                renderGrid(currentItems);
+                var needFetch = Object.keys(descMap).filter(function(k) { return descMap[k].download_url; });
+                if (needFetch.length === 0) {
+                    document.getElementById("status").textContent = "共 " + currentItems.length + " 件";
+                    cacheSet("folder_" + path, { items: currentItems });
+                    preloadAdjacent(path);
+                    return;
+                }
+                document.getElementById("status").textContent = "共 " + currentItems.length + " 件，正在加载提示词…";
+                var concurrency = 12;
+                function fetchBatch(start) {
+                    if (signal.aborted) return Promise.reject(new DOMException("abort"));
+                    var slice = needFetch.slice(start, start + concurrency);
+                    if (slice.length === 0) return Promise.resolve();
+                    return Promise.all(slice.map(function(k) {
+                        return fetch(descMap[k].download_url, { signal: signal })
+                            .then(function(r) { return r.text(); })
+                            .then(function(t) {
+                                try { descMap[k].text = decodeURIComponent(escape(t)); } catch (e) { descMap[k].text = t || "暂无说明"; }
+                            }).catch(function() { descMap[k].text = "暂无说明"; });
+                    })).then(function() {
+                        if (signal.aborted) return Promise.reject(new DOMException("abort"));
+                        updateCardTags(slice, descMap);
+                        var done = Math.min(start + concurrency, needFetch.length);
+                        document.getElementById("status").textContent = "共 " + currentItems.length + " 件，提示词 " + done + "/" + needFetch.length + "…";
+                        return fetchBatch(start + concurrency);
+                    });
+                }
+                fetchBatch(0).then(function() {
+                    if (signal.aborted) return;
+                    document.getElementById("status").textContent = "共 " + currentItems.length + " 件";
+                    cacheSet("folder_" + path, { items: currentItems });
+                    preloadAdjacent(path);
+                }).catch(function(e) {
+                    if (e.name !== "AbortError" && !signal.aborted) document.getElementById("status").textContent = "加载失败";
+                });
+            })
+            .catch(function(e) {
+                if (e.name !== "AbortError") document.getElementById("status").textContent = "加载失败";
+            });
+    }
+
+    function preloadAdjacent(path) {
+        var idx = folderList.indexOf(path);
+        if (idx < 0) return;
+        if (idx > 0) preloadFolder(folderList[idx - 1]);
+        if (idx < folderList.length - 1) preloadFolder(folderList[idx + 1]);
+    }
+
+    document.getElementById("folderSelect").onchange = function() {
+        var path = this.value;
+        loadFolder(path);
+        if (isIframe || isOpener) {
+            try {
+                var target = isOpener && window.opener && !window.opener.closed ? window.opener : window.parent;
+                target.postMessage({ type: "fmiyd_kisegae_folder", folder: path, node_id: hasValidNodeId ? nodeId : null }, "*");
+            } catch (e) {}
+        }
+    };
+    document.getElementById("refreshBtn").onclick = function() { if (currentPath) loadFolder(currentPath); };
+
+    (function init() {
+        var cachedTree = cacheGet("tree");
+        if (cachedTree && Array.isArray(cachedTree) && cachedTree.length) {
+            folderList = cachedTree.map(function(f) { return f.path; });
+            var sel = document.getElementById("folderSelect");
+            cachedTree.forEach(function(f, i) {
+                var opt = document.createElement("option");
+                opt.value = f.path;
+                opt.textContent = "画廊 " + (i + 1);
+                sel.appendChild(opt);
+            });
+            if (cachedTree.length) {
+                sel.value = cachedTree[0].path;
+                loadFolder(cachedTree[0].path);
+            }
+            document.getElementById("status").textContent = "已从缓存加载列表";
+            return;
+        }
+        fetch(API_TREE)
+            .then(function(r) {
+                return r.json().then(function(data) {
+                    if (!r.ok) {
+                        var msg = (data && (data.message || data.error)) || ("HTTP " + r.status);
+                        throw new Error(msg);
+                    }
+                    return data;
+                });
+            })
+            .then(function(data) {
+                if (data.message && !data.tree) throw new Error(data.message);
+                var folders = (data.tree || []).filter(function(item) { return item.type === "tree"; });
+                folderList = folders.map(function(f) { return f.path; });
+                cacheSet("tree", folders, 30);
+                var sel = document.getElementById("folderSelect");
+                folders.forEach(function(f, i) {
+                    var opt = document.createElement("option");
+                    opt.value = f.path;
+                    opt.textContent = "画廊 " + (i + 1);
+                    sel.appendChild(opt);
+                });
+                if (folders.length) {
+                    sel.value = folders[0].path;
+                    loadFolder(folders[0].path);
+                } else document.getElementById("status").textContent = "未找到画廊";
+            })
+            .catch(function(e) {
+                var st = document.getElementById("status");
+                if (st) {
+                    st.textContent =
+                        "获取失败（请确认本机 Comfy 能访问 GitHub；可点刷新重试）"
+                        + (e && e.message ? "：" + String(e.message).slice(0, 120) : "");
+                }
+            });
+    })();
+})();
+    </script>
+</body>
+</html>

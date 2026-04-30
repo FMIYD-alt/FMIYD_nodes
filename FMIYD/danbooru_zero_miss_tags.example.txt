@@ -1,0 +1,5 @@
+# 将「Danbooru 0 结果」的画师 tag 每行写一个，保存为 danbooru_zero_miss_tags.txt 后执行：
+#   python scripts/prune_artists_no_danbooru.py --failures-file danbooru_zero_miss_tags.txt
+#
+# 或一键生成该文件（需 DANBOORU_LOGIN / DANBOORU_API_KEY）：
+#   python scripts/audit_danbooru_tag_coverage.py --all --failures-out danbooru_zero_miss_tags.txt

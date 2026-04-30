@@ -1,0 +1,906 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Danbooru 画廊</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; max-width: 100%; overflow-x: hidden; }
+    body { font-family: system-ui, sans-serif; background: #121212; color: #ddd; height: 100vh; display: flex; flex-direction: column; }
+    header { padding: 8px 10px; border-bottom: 1px solid #333; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+    .tabs button { padding: 6px 12px; border-radius: 6px; border: 1px solid #444; background: #1e1e1e; color: #ccc; cursor: pointer; font-size: 12px; }
+    .tabs button.on { background: #3a6ea5; border-color: #5a8ed5; color: #fff; }
+    .panel { display: none; padding: 8px 10px; border-bottom: 1px solid #2a2a2a; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .panel.on { display: flex; }
+    .btn { padding: 6px 12px; border-radius: 6px; border: 1px solid #555; background: #2a2a2a; color: #ddd; cursor: pointer; font-size: 12px; }
+    .btn:hover { border-color: #7af; }
+    input, select { padding: 6px 8px; border-radius: 6px; border: 1px solid #555; background: #1f1f1f; color: #ddd; font-size: 12px; }
+    /* 与 P 站画廊相同：Grid + 1px 行 + JS 计算 row-span，多列不同高度、紧密瀑布流 */
+    #grid {
+      flex: 1;
+      min-height: 0;
+      min-width: 0;
+      width: 100%;
+      overflow-x: hidden;
+      overflow-y: auto;
+      padding: 5px;
+      background: #0f0f0f;
+      border-radius: 4px;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      grid-gap: 5px;
+      grid-auto-rows: 1px;
+      align-content: start;
+    }
+    .card {
+      position: relative;
+      grid-row-start: auto;
+      display: block;
+      border-radius: 6px;
+      overflow: hidden;
+      cursor: pointer;
+      background: #252525;
+      border: 2px solid transparent;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .card:hover { border-color: #555; box-shadow: 0 0 10px rgba(0,0,0,0.35); }
+    .card.sel { border-color: #6af; box-shadow: 0 0 14px rgba(102,170,255,0.35); }
+    .card > img { display: block; width: 100%; height: auto; border-radius: 4px 4px 0 0; background: #111; }
+    .card .card-ovl { position: absolute; top: 0; right: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; padding: 6px; z-index: 2; pointer-events: none; }
+    .card .card-ovl .btn { pointer-events: auto; }
+    .card .t { max-width: 100%; padding: 4px 6px; font-size: 10px; background: rgba(0,0,0,0.65); color: #ccc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; border-radius: 0 0 4px 4px; }
+    #globalTagTip { position: fixed; z-index: 20000; max-width: min(92vw, 420px); max-height: min(50vh, 300px); overflow: auto; padding: 10px 12px; background: #1a1a1a; border: 1px solid #555; border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,0.55); font-size: 11px; line-height: 1.45; color: #ddd; white-space: pre-wrap; word-break: break-word; pointer-events: none; display: none; }
+    .tag-view-overlay { position: fixed; inset: 0; z-index: 19990; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.6); padding: 16px; }
+    .tag-view-panel { width: 100%; max-width: 520px; max-height: min(85vh, 560px); display: flex; flex-direction: column; gap: 10px; background: #1a1a1a; border: 1px solid #555; border-radius: 10px; padding: 12px 14px; }
+    .tag-view-hd { display: flex; align-items: center; justify-content: space-between; font-size: 14px; font-weight: 600; color: #eee; }
+    .tag-view-chips { display: flex; flex-wrap: wrap; gap: 6px; overflow-y: auto; max-height: 360px; }
+    .tag-view-chips .tag-pill { border: 1px solid #4b4b4b; background: #252525; color: #ddd; border-radius: 6px; padding: 4px 8px; font-size: 12px; cursor: pointer; }
+    .tag-view-chips .tag-pill:hover { border-color: #6af; color: #fff; }
+    .tag-view-cat-hd { width: 100%; margin: 6px 0 2px 0; font-size: 11px; color: #aab; font-weight: 600; }
+    .tag-pill.tag-artist { background:#332a14; border-color:#7b6a2f; color:#ffe7a3; }
+    .tag-pill.tag-copyright { background:#3a1f26; border-color:#8a3c52; color:#ffd4df; }
+    .tag-pill.tag-character { background:#1d3325; border-color:#2d7a48; color:#d2f6de; }
+    .tag-pill.tag-general { background:#1f2d3a; border-color:#3b6d94; color:#d8ecff; }
+    .tag-pill.tag-meta { background:#2a2a2a; border-color:#666; color:#ddd; }
+    .suggest-wrap { position: relative; min-width: 320px; flex: 1; }
+    .suggest-list { position: absolute; left: 0; right: 0; top: calc(100% + 4px); background: #181818; border: 1px solid #444; border-radius: 8px; max-height: 220px; overflow: auto; z-index: 30; display: none; }
+    .suggest-item { padding: 6px 8px; cursor: pointer; font-size: 12px; border-bottom: 1px solid #242424; }
+    .suggest-item:last-child { border-bottom: none; }
+    .suggest-item:hover { background: #252525; }
+    .topbar { padding: 6px 10px; border-bottom: 1px solid #2a2a2a; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+    .tag-chip { border:1px solid #4b4b4b; background:#1e1e1e; color:#cfcfcf; border-radius:999px; padding:2px 8px; font-size:11px; cursor:pointer; }
+    .tag-chip:hover { border-color:#7af; color:#fff; }
+    .hint { font-size: 11px; color: #9aa; }
+    #status { padding: 6px 10px; font-size: 11px; color: #888; border-top: 1px solid #333; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="tabs" id="tabs">
+      <button type="button" data-tab="ranking" class="on">排行榜</button>
+      <button type="button" data-tab="favorites">收藏</button>
+      <button type="button" data-tab="search">Tag 搜索</button>
+      <button type="button" data-tab="history">历史</button>
+    </div>
+    <button class="btn" id="btnRefresh">刷新</button>
+  </header>
+  <div class="panel" id="p-search">
+    <div class="suggest-wrap">
+      <input type="text" id="qTags" placeholder="输入 tags，如：1girl blue_eyes" style="width:100%;" />
+      <div class="suggest-list" id="tagSuggest"></div>
+    </div>
+    <button class="btn" id="btnSearch">搜索</button>
+    <span class="hint">输入时会联想包含该词的 tag；点选可自动填入搜索框</span>
+  </div>
+  <div class="topbar">
+    <button class="btn" id="btnSettings">设置</button>
+    <button class="btn" id="btnClearSel">清空选择</button>
+    <button class="btn" id="btnPrevPage">上一页</button>
+    <span class="hint" id="pageInfo">第 1 页</span>
+    <button class="btn" id="btnNextPage">下一页</button>
+    <input id="inpPageJump" type="number" min="1" step="1" placeholder="页码" style="width:72px;" />
+    <button class="btn" id="btnPageJump">跳转</button>
+    <label class="hint"><input type="checkbox" id="chkMulti" /> 多选</label>
+    <span class="hint" id="selInfo">已选 0</span>
+    <span class="hint" id="loadHint">分页模式</span>
+  </div>
+  <div id="grid"></div>
+  <div id="globalTagTip" aria-live="polite"></div>
+  <div id="tagViewOverlay" class="tag-view-overlay" style="display:none" aria-hidden="true">
+    <div class="tag-view-panel" role="dialog" aria-label="作品标签" onclick="event.stopPropagation()">
+      <div class="tag-view-hd">
+        <span>该图标签</span>
+        <button type="button" class="btn" id="tagViewClose" title="关闭" style="padding:2px 8px">×</button>
+      </div>
+      <p class="hint" style="margin:0;">点击某一标签会切换到「Tag 搜索」并仅按该词搜索；下方可复制完整标签串</p>
+      <div class="tag-view-chips" id="tagViewChips"></div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button type="button" class="btn" id="tagViewCopy">复制全部到剪贴板</button>
+      </div>
+    </div>
+  </div>
+  <div id="status"></div>
+  <script>
+  (function(){
+    var nodeId=(new URLSearchParams(location.search)).get("node_id")||"";
+    var tab="ranking",currentPage=1,PAGE_SIZE=24;
+    var AUTO_LOAD_GAP=220;
+    var danbooruLogin="",danbooruApiKey="";
+    var selectedId="",selectedUrl="",selectedTags="";
+    var isLoading=false,hasMore=true,lastQueryKey="";
+    var selectedMap={}; // id -> {url,tags}
+    var settings={
+      multi_select:false,
+      filter_enabled:true,
+      filter_tags:["watermark","sample_watermark","weibo_username","weibo","weibo_logo","weibo_watermark","censored","mosaic_censoring","artist_name","twitter_username"],
+      blacklist:[],
+      rating_flags:{g:true,s:true,q:true,e:true},
+      underscore_to_space:false,
+      escape_brackets:false
+    };
+    var favSet=new Set();
+    var historyList=[];
+    var HISTORY_KEY="fmiyd_danbooru_history";
+    var tagViewRaw="";
+    var _tipAnchor=null;
+    var autoLoadArmed=true;
+    var searchActive=false;
+    function syncGalleryState(){
+      try{
+        window.parent.postMessage({
+          type:"fmiyd_danbooru_state_sync",
+          node_id:nodeId,
+          state:{
+            tab:tab,
+            qTags:String(document.getElementById("qTags")?.value||""),
+            currentPage:Math.max(1,Number(currentPage)||1),
+            searchActive:!!searchActive
+          }
+        },"*");
+      }catch(e){}
+    }
+
+    function status(t){document.getElementById("status").textContent=t||"";}
+    function selectedRatingParam(){
+      var rf=(settings&&settings.rating_flags)||{};
+      var out=[];
+      ["g","s","q","e"].forEach(function(k){ if(rf[k]!==false) out.push(k); });
+      return out.length?out.join(","):"none";
+    }
+    function setPageLabel(){document.getElementById("pageInfo").textContent="第 "+currentPage+" 页";}
+    function splitTags(s){
+      return String(s||"").trim().split(/\s+/).filter(Boolean);
+    }
+    function positionTagTip(anchor){
+      var tip=document.getElementById("globalTagTip");
+      if(!tip||tip.style.display==="none") return;
+      var r=anchor.getBoundingClientRect();
+      var pad=8;
+      var tw=tip.offsetWidth;
+      var th=tip.offsetHeight;
+      var top=r.bottom+pad;
+      if(top+th>window.innerHeight-8) top=Math.max(8,r.top-th-pad);
+      var left=Math.min(Math.max(8,r.left),Math.max(8,window.innerWidth-tw-8));
+      tip.style.left=left+"px";
+      tip.style.top=top+"px";
+    }
+    function showTagTip(text, anchor){
+      var raw=String(text||"").trim();
+      if(!raw) return;
+      _tipAnchor=anchor;
+      var tip=document.getElementById("globalTagTip");
+      tip.textContent=raw;
+      tip.style.display="block";
+      requestAnimationFrame(function(){ positionTagTip(anchor); });
+    }
+    function hideTagTip(){
+      _tipAnchor=null;
+      var tip=document.getElementById("globalTagTip");
+      if(tip) tip.style.display="none";
+    }
+    function copyToClipboard(text){
+      var t=String(text||"");
+      if(!t) return;
+      if(navigator.clipboard&&navigator.clipboard.writeText){
+        navigator.clipboard.writeText(t).then(function(){ status("已复制全部标签到剪贴板"); }).catch(function(){ fallbackCopyText(t); });
+      } else fallbackCopyText(t);
+    }
+    function fallbackCopyText(t){
+      var ta=document.createElement("textarea");
+      ta.value=t;
+      ta.style.position="fixed";
+      ta.style.left="-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      try{ document.execCommand("copy"); status("已复制全部标签到剪贴板"); }catch(e){ status("复制失败，请手动选择复制"); }
+      document.body.removeChild(ta);
+    }
+    function _splitTagString(raw){
+      return String(raw||"").trim().split(/\s+/).filter(Boolean);
+    }
+    function _postCategorizedTags(post){
+      var cat={
+        artist:_splitTagString(post&&post.tag_string_artist),
+        copyright:_splitTagString(post&&post.tag_string_copyright),
+        character:_splitTagString(post&&post.tag_string_character),
+        general:_splitTagString(post&&post.tag_string_general),
+        meta:_splitTagString(post&&post.tag_string_meta)
+      };
+      var hasAny=cat.artist.length||cat.copyright.length||cat.character.length||cat.general.length||cat.meta.length;
+      if(!hasAny){
+        cat.general=_splitTagString(post&&post.tags);
+      }
+      return cat;
+    }
+    function openTagView(post){
+      hideTagTip();
+      var p=(post&&typeof post==="object")?post:{tags:String(post||"")};
+      tagViewRaw=String(p.tags||"").trim();
+      var cats=_postCategorizedTags(p);
+      var order=["artist","copyright","character","general","meta"];
+      var labels={artist:"Artist",copyright:"Copyright",character:"Character",general:"General",meta:"Meta"};
+      var chips=document.getElementById("tagViewChips");
+      chips.innerHTML="";
+      if(!tagViewRaw){
+        var p=document.createElement("p");
+        p.className="hint";
+        p.textContent="该作品未返回 tag 串";
+        chips.appendChild(p);
+      } else {
+        order.forEach(function(cat){
+          var arr=cats[cat]||[];
+          if(!arr.length) return;
+          var hd=document.createElement("div");
+          hd.className="tag-view-cat-hd";
+          hd.textContent=labels[cat];
+          chips.appendChild(hd);
+          arr.forEach(function(tag){
+            var b=document.createElement("button");
+            b.type="button";
+            b.className="tag-pill tag-"+cat;
+            b.textContent=tag;
+            b.onclick=function(){
+              document.getElementById("qTags").value=tag;
+              document.getElementById("tagViewOverlay").style.display="none";
+              closeTagView();
+              closeSuggest();
+              if(tab!=="search") switchTab("search");
+              else resetAndReload();
+              status("按标签搜索："+tag);
+            };
+            chips.appendChild(b);
+          });
+        });
+      }
+      document.getElementById("tagViewOverlay").style.display="flex";
+      document.getElementById("tagViewOverlay").setAttribute("aria-hidden","false");
+    }
+    function closeTagView(){
+      var ov=document.getElementById("tagViewOverlay");
+      ov.style.display="none";
+      ov.setAttribute("aria-hidden","true");
+    }
+    function loadSettings(){
+      try{
+        var raw=localStorage.getItem("fmiyd_danbooru_gallery_settings");
+        if(raw){
+          var d=JSON.parse(raw);
+          if(d&&typeof d==="object") settings=Object.assign(settings,d);
+        }
+      }catch(e){}
+      if(!settings.rating_flags || typeof settings.rating_flags!=="object"){
+        settings.rating_flags={g:true,s:true,q:true,e:true};
+      }
+      ["g","s","q","e"].forEach(function(k){
+        if(typeof settings.rating_flags[k]!=="boolean") settings.rating_flags[k]=true;
+      });
+      document.getElementById("chkMulti").checked=!!settings.multi_select;
+    }
+    function saveSettings(){
+      try{localStorage.setItem("fmiyd_danbooru_gallery_settings",JSON.stringify(settings));}catch(e){}
+    }
+    function loadFavSet(){
+      try{
+        var raw=localStorage.getItem("fmiyd_danbooru_favorites");
+        var arr=raw?JSON.parse(raw):[];
+        favSet=new Set(Array.isArray(arr)?arr.map(function(x){return String(x);}):[]);
+      }catch(e){ favSet=new Set(); }
+    }
+    function saveFavSet(){
+      try{localStorage.setItem("fmiyd_danbooru_favorites",JSON.stringify(Array.from(favSet)));}catch(e){}
+    }
+    function loadHistory(){
+      try{
+        var raw=localStorage.getItem(HISTORY_KEY);
+        var arr=raw?JSON.parse(raw):[];
+        historyList=Array.isArray(arr)?arr.filter(function(x){return x&&typeof x==="object";}):[];
+      }catch(e){ historyList=[]; }
+    }
+    function saveHistory(){
+      try{localStorage.setItem(HISTORY_KEY,JSON.stringify(historyList));}catch(e){}
+    }
+    function addHistoryEntry(post, pickedUrl){
+      if(!post || !post.id) return;
+      var iu=(post.image_urls||{});
+      var u=String(pickedUrl||iu.original||iu.large||iu.thumb||"").trim();
+      if(!u) return;
+      historyList.push({
+        id: post.id,
+        title: post.title||("ID "+post.id),
+        rating: post.rating||"",
+        score: Number(post.score||0),
+        tags: post.tags||"",
+        image_urls: {
+          thumb: iu.thumb||"",
+          large: iu.large||"",
+          original: u
+        },
+        ts: Date.now()
+      });
+      saveHistory();
+    }
+    function updateSelInfo(){
+      document.getElementById("selInfo").textContent="已选 "+String(Object.keys(selectedMap).length);
+    }
+    function normTag(t){
+      var x=String(t||"").trim();
+      if(settings.underscore_to_space) x=x.replace(/_/g," ");
+      if(settings.escape_brackets) x=x.replace(/\(/g,"\\(").replace(/\)/g,"\\)");
+      return x;
+    }
+    function splitSearchTags(raw){
+      return String(raw||"")
+        .replace(/[，]/g, ",")
+        .split(",")
+        .map(function(x){
+          var t=String(x||"").trim();
+          if(!t) return "";
+          // 逗号分隔 tag；tag 内空格与下划线等价，统一转为下划线。
+          t=t.replace(/\s+/g, "_").replace(/_+/g, "_");
+          return t;
+        })
+        .filter(Boolean);
+    }
+    function convertTagsToApiFormat(tagsString){
+      if(!tagsString) return "";
+      var tags=String(tagsString).split(",").filter(function(tag){ return String(tag||"").trim()!==""; });
+      return tags.map(function(tag){
+        var convertedTag=String(tag||"").trim();
+        convertedTag=convertedTag.replace(/\\([()])/g, "$1");
+        if(!convertedTag.includes(":")){
+          convertedTag=convertedTag.replace(/\s+/g, "_");
+        }
+        return convertedTag;
+      }).join(" ");
+    }
+    function normalizeSearchInput(raw){
+      return splitSearchTags(raw).join(",");
+    }
+    function buildOutputTags(raw){
+      var bl=new Set((settings.blacklist||[]).map(function(x){return String(x||"").trim();}).filter(Boolean));
+      var ft=new Set((settings.filter_tags||[]).map(function(x){return String(x||"").trim();}).filter(Boolean));
+      var arr=String(raw||"").split(/\s+/).filter(function(t){
+        if(!t) return false;
+        if(bl.has(t)) return false;
+        if(settings.filter_enabled && ft.has(t)) return false;
+        return true;
+      }).map(normTag);
+      return arr.length ? (arr.join(", ") + ",") : "";
+    }
+    function relayoutCard(card){
+      var g=document.getElementById("grid");
+      if(!g||!card) return;
+      var img=card.querySelector("img");
+      if(!img) return;
+      var title=card.querySelector(".t");
+      var cs=window.getComputedStyle(g);
+      var rowGap=parseInt(cs.getPropertyValue("grid-row-gap")||cs.getPropertyValue("gap")||"0",10)||0;
+      var rowHeight=parseInt(cs.getPropertyValue("grid-auto-rows")||"1",10)||1;
+      var imgW=img.clientWidth||card.clientWidth||0;
+      var imgH=0;
+      if(imgW>0 && img.naturalWidth>0 && img.naturalHeight>0){
+        imgH=imgW*(img.naturalHeight/img.naturalWidth);
+      }else{
+        imgH=img.clientHeight||0;
+      }
+      var titleH=title?title.getBoundingClientRect().height:0;
+      var totalH=Math.ceil(imgH+titleH+4);
+      if(totalH>0){
+        var spans=Math.ceil((totalH+rowGap)/(rowHeight+rowGap));
+        card.style.gridRowEnd="span "+spans;
+      }
+    }
+    var relayoutTimer=0;
+    function scheduleGridRelayout(){
+      if(relayoutTimer) window.cancelAnimationFrame(relayoutTimer);
+      relayoutTimer=window.requestAnimationFrame(function(){
+        relayoutTimer=0;
+        var g=document.getElementById("grid");
+        if(!g) return;
+        Array.from(g.querySelectorAll(".card")).forEach(function(card){ relayoutCard(card); });
+      });
+    }
+    function proxy(u){return u?"/fmiyd/danbooru_preview_image?url="+encodeURIComponent(u):"";}
+    function headers(){
+      var h={Accept:"application/json"};
+      if(danbooruLogin) h["X-Danbooru-Login"]=danbooruLogin;
+      if(danbooruApiKey) h["X-Danbooru-Api-Key"]=danbooruApiKey;
+      return h;
+    }
+    function syncSelection(){
+      var keys=Object.keys(selectedMap);
+      var urls=keys.map(function(k){return selectedMap[k].url;}).filter(Boolean);
+      var tags=keys.map(function(k){return selectedMap[k].tags;}).filter(Boolean).join(", ");
+      var one=selectedUrl||urls[urls.length-1]||"";
+      window.parent.postMessage({type:"fmiyd_danbooru_selection",node_id:nodeId,url:one,urls:urls,tags:tags,nonce:String(Date.now())},"*");
+      updateSelInfo();
+    }
+    function clearSelection(push){
+      selectedId=""; selectedUrl=""; selectedTags="";
+      selectedMap={};
+      var g=document.getElementById("grid");
+      if(g){Array.from(g.querySelectorAll(".card.sel")).forEach(function(el){el.classList.remove("sel");});}
+      if(push!==false) syncSelection();
+      else updateSelInfo();
+    }
+    function applyCardSelection(card, post, checked){
+      var pid=String(post.id||"");
+      if(!pid) return;
+      var iu=(post.image_urls||{});
+      var u=String(iu.original||iu.large||iu.thumb||"").trim();
+      if(!u||!/^https?:\/\//.test(u)) return;
+      var tg=buildOutputTags(post.tags||"");
+      if(checked){
+        selectedMap[pid]={url:u,tags:tg};
+        card.classList.add("sel");
+        selectedId=pid; selectedUrl=u; selectedTags=tg;
+        addHistoryEntry(post,u);
+      }else{
+        delete selectedMap[pid];
+        card.classList.remove("sel");
+        var ks=Object.keys(selectedMap);
+        if(!ks.length){ selectedId=""; selectedUrl=""; selectedTags=""; }
+      }
+      syncSelection();
+      status(checked?("已选中 ID "+pid):("已取消 ID "+pid));
+    }
+    async function setFavorite(postId, enable){
+      if(!(danbooruLogin&&danbooruApiKey)){ status("收藏功能需要先同步 D 站账号"); return false; }
+      var path=enable?"/fmiyd/danbooru_gallery/favorites/add":"/fmiyd/danbooru_gallery/favorites/remove";
+      var r=await fetch(path,{method:"POST",headers:Object.assign({"Content-Type":"application/json"},headers()),body:JSON.stringify({post_id:Number(postId)||0})});
+      var d=await r.json().catch(function(){return {};});
+      if(!r.ok||!d.success){ status("收藏操作失败: "+String(d.error||d.status||r.status)); return false; }
+      if(enable) favSet.add(String(postId)); else favSet.delete(String(postId));
+      saveFavSet();
+      return true;
+    }
+    async function j(url){
+      var r=await fetch(url,{headers:headers()});
+      var d=await r.json().catch(function(){return {};});
+      if(!r.ok) throw new Error(d.error||String(r.status));
+      return d;
+    }
+    function renderPosts(list, append){
+      var g=document.getElementById("grid");
+      if(!append){
+        clearSelection(false);
+        g.innerHTML="";
+        if(!list||!list.length) return;
+      } else {
+        if(!list||!list.length) return;
+      }
+      (list||[]).forEach(function(it){
+        if(!it||!it.id)return;
+        var c=document.createElement("div");
+        c.className="card";
+        var img=document.createElement("img");
+        var iu=(it.image_urls||{});
+        img.loading="lazy"; img.alt=""; img.src=proxy(iu.thumb||iu.large||iu.original||"")||"";
+        img.onload=function(){ relayoutCard(c); };
+        img.onerror=function(){ scheduleGridRelayout(); };
+        c.appendChild(img);
+        var t=document.createElement("div");
+        t.className="t";
+        t.textContent=(it.title||("ID "+it.id))+"  score:"+String(it.score||0)+"  rating:"+String(it.rating||"");
+        var ovl=document.createElement("div");
+        ovl.className="card-ovl";
+        var tagBtn=document.createElement("button");
+        tagBtn.className="btn";
+        tagBtn.type="button";
+        tagBtn.textContent="标签";
+        tagBtn.title="查看全部标签、复制、点选单 tag 搜索";
+        tagBtn.style.cssText="padding:2px 6px;font-size:10px;line-height:1.2;border-radius:10px;background:rgba(20,20,20,.9);";
+        tagBtn.onclick=function(ev){
+          ev.stopPropagation();
+          openTagView(it);
+        };
+        var fav=document.createElement("button");
+        fav.className="btn";
+        fav.type="button";
+        fav.style.cssText="padding:2px 6px;font-size:11px;line-height:1.2;border-radius:12px;background:rgba(20,20,20,.9);";
+        var isFav=favSet.has(String(it.id))||tab==="favorites";
+        fav.textContent=isFav?"★":"☆";
+        fav.title=isFav?"取消收藏":"加入收藏";
+        fav.onclick=function(ev){
+          ev.stopPropagation();
+          var want=fav.textContent!=="★";
+          setFavorite(it.id,want).then(function(ok){
+            if(!ok) return;
+            fav.textContent=want?"★":"☆";
+            fav.title=want?"取消收藏":"加入收藏";
+          });
+        };
+        ovl.appendChild(tagBtn);
+        ovl.appendChild(fav);
+        c.appendChild(ovl);
+        c.appendChild(t);
+        c.addEventListener("mouseenter", function(){
+          if(it.tags) showTagTip(it.tags, c);
+        });
+        c.addEventListener("mouseleave", function(){
+          hideTagTip();
+        });
+        c.onclick=function(){
+          var multi=!!settings.multi_select;
+          var pid=String(it.id||"");
+          if(!multi){
+            clearSelection(false);
+            applyCardSelection(c,it,true);
+            return;
+          }
+          var checked=!selectedMap[pid];
+          applyCardSelection(c,it,checked);
+        };
+        g.appendChild(c);
+        relayoutCard(c);
+      });
+      scheduleGridRelayout();
+      syncSelection();
+    }
+    function queryKey(){
+      var tags=(tab==="search")?normalizeSearchInput(document.getElementById("qTags").value):"";
+      var rating=selectedRatingParam();
+      return [tab,rating,tags].join("||");
+    }
+    function updateLoadHint(){
+      var txt;
+      if(tab==="history") txt = hasMore ? "下拉到底自动加载更多历史" : "历史记录已到底";
+      else txt = hasMore ? "下拉到底自动加载更多" : "已到最后一页";
+      document.getElementById("loadHint").textContent = txt;
+    }
+    function setLoadingHint(loading){
+      if(loading){
+        document.getElementById("loadHint").textContent="加载中...";
+      }else{
+        updateLoadHint();
+      }
+    }
+    function renderHistoryPage(append){
+      var all=(historyList||[]).slice().reverse();
+      var start=(currentPage-1)*PAGE_SIZE;
+      var list=all.slice(start,start+PAGE_SIZE);
+      renderPosts(list,!!append);
+      hasMore=(start+PAGE_SIZE)<all.length;
+      updateLoadHint();
+      status((append?"已追加":"已加载")+" history（共 "+all.length+" 条）");
+    }
+    async function loadCurrent(append){
+      if(isLoading) return;
+      isLoading=true;
+      setLoadingHint(true);
+      try{
+        if(tab==="history"){
+          renderHistoryPage(append);
+          return;
+        }
+        var rating=selectedRatingParam();
+        var tags="";
+        if(tab==="search") tags=normalizeSearchInput(document.getElementById("qTags").value);
+        var d=await j("/fmiyd/danbooru_gallery/posts?mode="+encodeURIComponent(tab)+"&page="+currentPage+"&limit="+PAGE_SIZE+"&rating="+encodeURIComponent(rating)+"&tags="+encodeURIComponent(tags));
+        renderPosts(d.posts||[], !!append);
+        hasMore=!!d.has_more;
+        updateLoadHint();
+        if(tab==="search"){
+          searchActive=true;
+          status((append?"已追加":"已加载")+" search | 实际查询: "+String(d.effective_tags||"(空)"));
+        }else{
+          status((append?"已追加":"已加载")+" "+tab);
+        }
+      } finally {
+        isLoading=false;
+        setLoadingHint(false);
+      }
+    }
+    function tryAutoLoadNext(){
+      if(isLoading||!hasMore) return;
+      var g=document.getElementById("grid");
+      if(!g) return;
+      var remain=g.scrollHeight-(g.scrollTop+g.clientHeight);
+      if(remain>AUTO_LOAD_GAP){
+        autoLoadArmed=true;
+        return;
+      }
+      if(!autoLoadArmed) return;
+      autoLoadArmed=false;
+      currentPage+=1;
+      loadCurrent(true).catch(function(e){
+        currentPage=Math.max(1,currentPage-1);
+        isLoading=false;
+        setLoadingHint(false);
+        status("加载失败: "+e.message);
+      });
+    }
+    function setupInfiniteUi(){
+      ["btnPrevPage","btnNextPage","inpPageJump","btnPageJump","pageInfo"].forEach(function(id){
+        var el=document.getElementById(id);
+        if(el) el.style.display="none";
+      });
+    }
+    function switchTab(t){
+      tab=t; currentPage=1;
+      autoLoadArmed=true;
+      Array.from(document.querySelectorAll("#tabs button")).forEach(function(x){x.classList.toggle("on",x.dataset.tab===t);});
+      document.getElementById("p-search").classList.toggle("on",t==="search");
+      hasMore=true;
+      lastQueryKey=queryKey();
+      loadCurrent(false).catch(function(e){isLoading=false;status("加载失败: "+e.message);});
+      syncGalleryState();
+    }
+    function resetAndReload(){
+      currentPage=1; hasMore=true;
+      autoLoadArmed=true;
+      lastQueryKey=queryKey();
+      updateLoadHint();
+      var g=document.getElementById("grid");
+      if(g) g.scrollTop=0;
+      loadCurrent(false).catch(function(e){isLoading=false;status("加载失败: "+e.message);});
+      syncGalleryState();
+    }
+    function openSettings(){
+      var bg=document.createElement("div");
+      bg.className="tag-view-overlay";
+      bg.style.zIndex="20010";
+      var panel=document.createElement("div");
+      panel.className="tag-view-panel";
+      panel.style.maxWidth="620px";
+      panel.onclick=function(e){e.stopPropagation();};
+      panel.innerHTML=
+        '<div class="tag-view-hd"><span>设置</span><button class="btn" id="stClose" style="padding:2px 8px">×</button></div>'+
+        '<label class="hint">D站账号 login</label><input id="stLogin" type="text" />'+
+        '<label class="hint">D站 API Key</label><input id="stApi" type="password" />'+
+        '<div class="hint" style="display:flex;gap:10px;flex-wrap:wrap;margin:2px 0 4px 0;">'+
+        '<label class="hint"><input id="stRtG" type="checkbox" /> General(g)-普通</label>'+
+        '<label class="hint"><input id="stRtS" type="checkbox" /> Sensitive(s)-敏感</label>'+
+        '<label class="hint"><input id="stRtQ" type="checkbox" /> Questionable(q)-存疑</label>'+
+        '<label class="hint"><input id="stRtE" type="checkbox" /> Explicit(e)-露骨</label>'+
+        '</div>'+
+        '<label class="hint">黑名单（空格分隔）</label><textarea id="stBl" style="min-height:52px;background:#1f1f1f;color:#ddd;border:1px solid #555;border-radius:6px;padding:6px;"></textarea>'+
+        '<label class="hint">过滤标签（空格分隔）</label><textarea id="stFt" style="min-height:52px;background:#1f1f1f;color:#ddd;border:1px solid #555;border-radius:6px;padding:6px;"></textarea>'+
+        '<label class="hint"><input id="stFilterOn" type="checkbox" /> 启用过滤标签</label>'+
+        '<label class="hint"><input id="stUnd" type="checkbox" /> 输出 tags 时下划线转空格</label>'+
+        '<label class="hint"><input id="stEsc" type="checkbox" /> 输出 tags 时转义括号</label>'+
+        '<div style="display:flex;justify-content:flex-end;gap:8px;"><button class="btn" id="stCancel">取消</button><button class="btn" id="stSave">保存</button></div>';
+      bg.appendChild(panel);
+      document.body.appendChild(bg);
+      panel.querySelector("#stLogin").value=danbooruLogin||"";
+      panel.querySelector("#stApi").value=danbooruApiKey||"";
+      panel.querySelector("#stBl").value=(settings.blacklist||[]).join(" ");
+      panel.querySelector("#stFt").value=(settings.filter_tags||[]).join(" ");
+      panel.querySelector("#stRtG").checked=!!(settings.rating_flags&&settings.rating_flags.g!==false);
+      panel.querySelector("#stRtS").checked=!!(settings.rating_flags&&settings.rating_flags.s!==false);
+      panel.querySelector("#stRtQ").checked=!!(settings.rating_flags&&settings.rating_flags.q!==false);
+      panel.querySelector("#stRtE").checked=!!(settings.rating_flags&&settings.rating_flags.e!==false);
+      panel.querySelector("#stFilterOn").checked=!!settings.filter_enabled;
+      panel.querySelector("#stUnd").checked=!!settings.underscore_to_space;
+      panel.querySelector("#stEsc").checked=!!settings.escape_brackets;
+      function close(){ if(bg&&bg.parentNode) bg.parentNode.removeChild(bg); }
+      panel.querySelector("#stClose").onclick=close;
+      panel.querySelector("#stCancel").onclick=close;
+      bg.onclick=close;
+      panel.querySelector("#stSave").onclick=function(){
+        settings.blacklist=String(panel.querySelector("#stBl").value||"").split(/\s+/).filter(Boolean);
+        settings.filter_tags=String(panel.querySelector("#stFt").value||"").split(/\s+/).filter(Boolean);
+        settings.rating_flags={
+          g:!!panel.querySelector("#stRtG").checked,
+          s:!!panel.querySelector("#stRtS").checked,
+          q:!!panel.querySelector("#stRtQ").checked,
+          e:!!panel.querySelector("#stRtE").checked
+        };
+        if(!settings.rating_flags.g && !settings.rating_flags.s && !settings.rating_flags.q && !settings.rating_flags.e){
+          settings.rating_flags={g:true,s:true,q:true,e:true};
+          status("分级不能全关，已自动恢复为全选");
+        }
+        settings.filter_enabled=!!panel.querySelector("#stFilterOn").checked;
+        settings.underscore_to_space=!!panel.querySelector("#stUnd").checked;
+        settings.escape_brackets=!!panel.querySelector("#stEsc").checked;
+        danbooruLogin=String(panel.querySelector("#stLogin").value||"").trim();
+        danbooruApiKey=String(panel.querySelector("#stApi").value||"").trim();
+        saveSettings();
+        window.parent.postMessage({type:"fmiyd_danbooru_set_creds",node_id:nodeId,login:danbooruLogin,api_key:danbooruApiKey},"*");
+        if(Object.keys(selectedMap).length){
+          Object.keys(selectedMap).forEach(function(k){
+            selectedMap[k].tags=buildOutputTags(selectedMap[k].tags||"");
+          });
+          syncSelection();
+        }
+        status("设置已保存并同步账号");
+        close();
+      };
+    }
+    function refreshToDefault(){
+      hideTagTip();
+      closeTagView();
+      closeSuggest();
+      currentPage=1;
+      hasMore=true;
+      autoLoadArmed=true;
+      tab="ranking";
+      searchActive=false;
+      document.getElementById("qTags").value="";
+      Array.from(document.querySelectorAll("#tabs button")).forEach(function(x){x.classList.toggle("on",x.dataset.tab==="ranking");});
+      document.getElementById("p-search").classList.remove("on");
+      clearSelection(true);
+      lastQueryKey=queryKey();
+      updateLoadHint();
+      var g=document.getElementById("grid");
+      if(g) g.scrollTop=0;
+      loadCurrent(false).catch(function(e){isLoading=false;status("刷新失败: "+e.message);});
+      syncGalleryState();
+    }
+    document.getElementById("tabs").onclick=function(e){var b=e.target.closest("button[data-tab]");if(!b)return;switchTab(b.dataset.tab);};
+    document.getElementById("btnSearch").onclick=function(){if(tab!=="search") return;searchActive=true;resetAndReload();};
+    document.getElementById("btnRefresh").onclick=function(){refreshToDefault();};
+    document.getElementById("btnSettings").onclick=function(){openSettings();};
+    document.getElementById("btnClearSel").onclick=function(){clearSelection(true);};
+    function jumpToPageByInput(){
+      if(isLoading) return;
+      var el=document.getElementById("inpPageJump");
+      var raw=String((el&&el.value)||"").trim();
+      var p=parseInt(raw,10);
+      if(!(p>=1)){ status("请输入大于等于 1 的页码"); return; }
+      if(p===currentPage){ status("已在第 "+currentPage+" 页"); return; }
+      currentPage=p;
+      loadCurrent(false).catch(function(e){isLoading=false;status("加载失败: "+e.message);});
+    }
+    document.getElementById("btnPrevPage").onclick=function(){
+      if(isLoading||currentPage<=1) return;
+      currentPage-=1;
+      loadCurrent(false).catch(function(e){isLoading=false;status("加载失败: "+e.message);});
+    };
+    document.getElementById("btnNextPage").onclick=function(){
+      if(isLoading) return;
+      if(!hasMore){ status("已到最后一页"); return; }
+      currentPage+=1;
+      loadCurrent(false).catch(function(e){isLoading=false;status("加载失败: "+e.message);});
+    };
+    document.getElementById("btnPageJump").onclick=function(){jumpToPageByInput();};
+    document.getElementById("inpPageJump").addEventListener("keydown", function(e){
+      if(e.key==="Enter") jumpToPageByInput();
+    });
+    document.getElementById("chkMulti").onchange=function(e){settings.multi_select=!!e.target.checked;saveSettings();clearSelection(true);};
+    var gridEl=document.getElementById("grid");
+    gridEl.addEventListener("scroll", function(){
+      hideTagTip();
+      tryAutoLoadNext();
+    });
+    window.addEventListener("resize", function(){
+      scheduleGridRelayout();
+      if(_tipAnchor) positionTagTip(_tipAnchor);
+    });
+    document.getElementById("tagViewClose").onclick=function(e){ e.stopPropagation(); closeTagView(); };
+    document.getElementById("tagViewCopy").onclick=function(e){ e.stopPropagation(); copyToClipboard(buildOutputTags(tagViewRaw)); };
+    document.getElementById("tagViewOverlay").onclick=function(){ closeTagView(); };
+    document.addEventListener("keydown", function(e){
+      if(e.key==="Escape") closeTagView();
+    });
+
+    var suggestEl=document.getElementById("tagSuggest");
+    var qInput=document.getElementById("qTags");
+    qInput.addEventListener("input", function(){ syncGalleryState(); });
+    var suggestTimer=0;
+    function closeSuggest(){suggestEl.style.display="none";suggestEl.innerHTML="";}
+    function splitInputByComma(raw){
+      return String(raw||"").replace(/[，]/g,",").split(",");
+    }
+    function lastSuggestToken(raw){
+      var parts=splitInputByComma(raw);
+      if(!parts.length) return "";
+      return String(parts[parts.length-1]||"").trim();
+    }
+    function applySuggestTag(name){
+      var parts=splitInputByComma(qInput.value);
+      if(!parts.length){
+        qInput.value=name+", ";
+        return;
+      }
+      parts[parts.length-1]=" "+name;
+      qInput.value=parts.map(function(x){return String(x||"").trim();}).filter(function(x){return x!=="";}).join(", ")+", ";
+    }
+    async function loadSuggest(){
+      var q=lastSuggestToken(qInput.value);
+      if(!q){closeSuggest();return;}
+      var d=await j("/fmiyd/danbooru_gallery/tags?q="+encodeURIComponent(q));
+      var rows=d.tags||[];
+      if(!rows.length){closeSuggest();return;}
+      suggestEl.innerHTML="";
+      rows.forEach(function(it){
+        var name=String(it.name||"").trim();
+        if(!name) return;
+        var row=document.createElement("div");
+        row.className="suggest-item";
+        row.textContent=name+" ("+String(it.post_count||0)+")";
+        row.onclick=function(){
+          applySuggestTag(name);
+          closeSuggest();
+          qInput.focus();
+        };
+        suggestEl.appendChild(row);
+      });
+      suggestEl.style.display="block";
+    }
+    qInput.addEventListener("input", function(){
+      if(suggestTimer) clearTimeout(suggestTimer);
+      suggestTimer=setTimeout(function(){loadSuggest().catch(function(){closeSuggest();});}, 220);
+    });
+    qInput.addEventListener("keydown", function(e){
+      if(e.key==="Enter"){
+        closeSuggest();
+        if(tab!=="search") switchTab("search");
+        else resetAndReload();
+      }
+    });
+    document.addEventListener("click", function(e){
+      if(e.target===qInput || suggestEl.contains(e.target)) return;
+      closeSuggest();
+    });
+
+    window.addEventListener("message",function(ev){
+      var d=ev.data;
+      if(!d||d.type!=="fmiyd_danbooru_creds") return;
+      danbooruLogin=String(d.login||"").trim();
+      danbooruApiKey=String(d.api_key||"").trim();
+      status("已同步 D 站账号"+(danbooruLogin?"："+danbooruLogin:"（匿名模式）"));
+      if(danbooruLogin&&danbooruApiKey){
+        j("/fmiyd/danbooru_gallery/verify_auth").then(function(v){
+          if(v&&v.valid) status("D 站账号验证成功："+danbooruLogin);
+        }).catch(function(){});
+      }else{
+        j("/fmiyd/danbooru_gallery/check_network").catch(function(){});
+      }
+      resetAndReload();
+    });
+    window.addEventListener("message",function(ev){
+      var d=ev.data;
+      if(!d||d.type!=="fmiyd_danbooru_restore_state") return;
+      var st=(d.gallery_state&&typeof d.gallery_state==="object")?d.gallery_state:{};
+      var savedTab=String(st.tab||"").trim();
+      var savedTags=String(st.qTags||"");
+      var savedPage=Math.max(1,parseInt(st.currentPage||1,10)||1);
+      var savedSearchActive=!!st.searchActive;
+      if(savedTags) document.getElementById("qTags").value=savedTags;
+      if(savedTab==="search" || savedSearchActive){
+        tab="search";
+        searchActive=true;
+        currentPage=savedPage;
+        Array.from(document.querySelectorAll("#tabs button")).forEach(function(x){x.classList.toggle("on",x.dataset.tab==="search");});
+        document.getElementById("p-search").classList.add("on");
+        hasMore=true;
+        var g=document.getElementById("grid");
+        if(g) g.scrollTop=0;
+        loadCurrent(false).catch(function(e){isLoading=false;status("加载失败: "+e.message);});
+      }
+    });
+
+    loadSettings();
+    loadFavSet();
+    loadHistory();
+    setupInfiniteUi();
+    updateLoadHint();
+    resetAndReload();
+    syncGalleryState();
+  })();
+  </script>
+</body>
+</html>
